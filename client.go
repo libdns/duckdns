@@ -84,7 +84,13 @@ func (p *Provider) doRequest(ctx context.Context, domain string, params map[stri
 	u, _ := url.Parse("https://www.duckdns.org/update")
 
 	// extract the main domain
-	mainDomain := getMainDomain(domain)
+	var mainDomain string
+	if p.OverrideDomain != "" {
+		mainDomain = p.OverrideDomain
+	} else {
+		mainDomain = getMainDomain(domain)
+	}
+	
 	if len(mainDomain) == 0 {
 		return nil, fmt.Errorf("unable to find the main domain for: %s", domain)
 	}
