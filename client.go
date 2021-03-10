@@ -139,6 +139,7 @@ func (p *Provider) doRequest(ctx context.Context, domain string, params map[stri
 // not in format subsubdomain.subdomain.duckdns.org.
 // So strip off everything that is not top 3 levels.
 func getMainDomain(domain string) string {
+	domain = strings.TrimSuffix(domain, ".")
 	split := dns.Split(domain)
 	if strings.HasSuffix(strings.ToLower(domain), "duckdns.org") {
 		if len(split) < 3 {
