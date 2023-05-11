@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/libdns/libdns"
 	"github.com/miekg/dns"
@@ -16,31 +19,61 @@ func (p *Provider) getDomain(ctx context.Context, zone string) ([]libdns.Record,
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	// we trim the dot at the end of the zone name to get the fqdn
-	// and then use it to fetch domain information through the api
-	fqdn := strings.TrimRight(zone, ".")
-
 	var libRecords []libdns.Record
 
-	// fetch the details for the domain
-	result, err := p.doRequest(ctx, fqdn, map[string]string{"verbose": "true"})
+	// we trim the dot at the end of the zone name to get the fqdn
+	fqdn := strings.TrimRight(zone, ".")
+
+	// DuckDNS' API is bad because it only has an `/update` endpoint which happens to
+	// return current values, while also updating the values based on the incoming
+	// request's IP address. So it's not safe to use for getting the current values
+	// because it has side effects. So instead, we should just make simple DNS queries
+	// to get the A, AAAA, and TXT records.
+	r := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 10 * time.Second}
+			return d.DialContext(ctx, network, "8.8.8.8:53")
+		},
+	}
+	ips, err := r.LookupHost(ctx, fqdn)
 	if err != nil {
 		return libRecords, err
 	}
 
-	// append the A and AAAA records which we should have (may be blank)
-	if result[1] != "" {
-		libRecords = append(libRecords, libdns.Record{
-			Type:  "A",
-			Name:  fqdn,
-			Value: result[1],
-		})
+	for _, ip := range ips {
+		parsed, err := netip.ParseAddr(ip)
+		if err != nil {
+			return libRecords, err
+		}
+
+		if parsed.Is4() {
+			libRecords = append(libRecords, libdns.Record{
+				Type:  "A",
+				Name:  "@",
+				Value: ip,
+			})
+		} else {
+			libRecords = append(libRecords, libdns.Record{
+				Type:  "AAAA",
+				Name:  "@",
+				Value: ip,
+			})
+		}
 	}
-	if result[2] != "" {
+
+	txt, err := r.LookupTXT(ctx, fqdn)
+	if err != nil {
+		return libRecords, err
+	}
+	for _, t := range txt {
+		if t == "" {
+			continue
+		}
 		libRecords = append(libRecords, libdns.Record{
-			Type:  "AAAA",
-			Name:  fqdn,
-			Value: result[2],
+			Type:  "TXT",
+			Name:  "@",
+			Value: t,
 		})
 	}
 
