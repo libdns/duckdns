@@ -79,22 +79,14 @@ func (p *Provider) setRecord(ctx context.Context, zone string, record libdns.Rec
 
 	params := map[string]string{"verbose": "true"}
 
-	switch record.(type) {
+	switch rec := record.(type) {
 	case libdns.TXT:
-		text, ok := record.(libdns.TXT)
-		if !ok {
-			return fmt.Errorf("failed to cast record to TXT")
-		}
-		params["txt"] = text.Text
+		params["txt"] = rec.Text
 	case libdns.Address:
-		address, ok := record.(libdns.Address)
-		if !ok {
-			return fmt.Errorf("failed to cast record to Address")
-		}
-		if address.IP.Is6() {
-			params["ipv6"] = address.IP.String()
+		if rec.IP.Is6() {
+			params["ipv6"] = rec.IP.String()
 		} else {
-			params["ip"] = address.IP.String()
+			params["ip"] = rec.IP.String()
 		}
 	default:
 		return fmt.Errorf("unsupported record type: %s", record.RR().Type)
