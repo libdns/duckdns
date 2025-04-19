@@ -29,22 +29,26 @@ func (p *Provider) getDomain(ctx context.Context, zone string) ([]libdns.Record,
 	// request's IP address. So it's not safe to use for getting the current values
 	// because it has side effects. So instead, we should just make simple DNS queries
 	// to get the A, AAAA, and TXT records.
+	resolver := p.Resolver
+	if resolver == "" {
+		resolver = defaultResolver
+	}
 	r := &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
 			d := net.Dialer{Timeout: 10 * time.Second}
-			return d.DialContext(ctx, network, "8.8.8.8:53")
+			return d.DialContext(ctx, network, resolver)
 		},
 	}
 	ips, err := r.LookupHost(ctx, fqdn)
 	if err != nil {
-		return libRecords, err
+		return libRecords, fmt.Errorf("DuckDNS unable to lookup host: %w", err)
 	}
 
 	for _, ip := range ips {
 		parsedIp, err := netip.ParseAddr(ip)
 		if err != nil {
-			return libRecords, err
+			return libRecords, fmt.Errorf("DuckDNS unable to parse IP address '%s': %w", ip, err)
 		}
 		libRecords = append(libRecords, libdns.Address{
 			Name: "@",
@@ -54,7 +58,7 @@ func (p *Provider) getDomain(ctx context.Context, zone string) ([]libdns.Record,
 
 	txt, err := r.LookupTXT(ctx, fqdn)
 	if err != nil {
-		return libRecords, err
+		return libRecords, fmt.Errorf("DuckDNS unable to lookup TXT records for '%s': %w", fqdn, err)
 	}
 	for _, t := range txt {
 		if t == "" {
@@ -89,7 +93,7 @@ func (p *Provider) setRecord(ctx context.Context, zone string, record libdns.Rec
 			params["ip"] = rec.IP.String()
 		}
 	default:
-		return fmt.Errorf("unsupported record type: %s", record.RR().Type)
+		return fmt.Errorf("DuckDNS unsupported record type: %s", record.RR().Type)
 	}
 
 	if clear {
@@ -105,7 +109,7 @@ func (p *Provider) setRecord(ctx context.Context, zone string, record libdns.Rec
 }
 
 func (p *Provider) doRequest(ctx context.Context, domain string, params map[string]string) ([]string, error) {
-	u, _ := url.Parse("https://www.duckdns.org/update")
+	u, _ := url.Parse(duckDNSUpdateURL)
 
 	// extract the main domain
 	var mainDomain string
@@ -116,7 +120,11 @@ func (p *Provider) doRequest(ctx context.Context, domain string, params map[stri
 	}
 
 	if len(mainDomain) == 0 {
-		return nil, fmt.Errorf("unable to find the main domain for: %s", domain)
+		return nil, fmt.Errorf("DuckDNS unable to find the main domain for: %s", domain)
+	}
+
+	if len(p.APIToken) != 36 {
+		return nil, fmt.Errorf("DuckDNS API token must be a 36 characters long UUID, got: '%s'", p.APIToken)
 	}
 
 	// set up the query with the params we always set
@@ -135,24 +143,24 @@ func (p *Provider) doRequest(ctx context.Context, domain string, params map[stri
 	// make the request
 	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("DuckDNS unable to create request: %w", err)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("DuckDNS unable to make request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("DuckDNS unable to read response body: %w", err)
 	}
 
 	body := string(bodyBytes)
 	bodyParts := strings.Split(body, "\n")
-	if bodyParts[0] != "OK" {
-		return nil, fmt.Errorf("DuckDNS request failed, expected (OK) but got (%s), url: [%s], body: %s", bodyParts[0], u, body)
+	if bodyParts[0] != responseOK {
+		return nil, fmt.Errorf("DuckDNS request failed, expected (OK) but got (%s), url: [%s], body: %s", bodyParts[0], u.String(), body)
 	}
 
 	return bodyParts, nil
@@ -165,7 +173,7 @@ func (p *Provider) doRequest(ctx context.Context, domain string, params map[stri
 func getMainDomain(domain string) string {
 	domain = strings.TrimSuffix(domain, ".")
 	split := dns.Split(domain)
-	if strings.HasSuffix(strings.ToLower(domain), "duckdns.org") {
+	if strings.HasSuffix(strings.ToLower(domain), duckDNSDomain) {
 		if len(split) < 3 {
 			return ""
 		}
@@ -176,3 +184,10 @@ func getMainDomain(domain string) string {
 
 	return domain[split[len(split)-1]:]
 }
+
+const (
+	duckDNSUpdateURL = "https://www.duckdns.org/update"
+	duckDNSDomain    = "duckdns.org"
+	responseOK       = "OK"
+	defaultResolver  = "8.8.8.8:53" // Google's public DNS server
+)
