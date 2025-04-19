@@ -3,7 +3,7 @@ package duckdns
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -42,24 +42,14 @@ func (p *Provider) getDomain(ctx context.Context, zone string) ([]libdns.Record,
 	}
 
 	for _, ip := range ips {
-		parsed, err := netip.ParseAddr(ip)
+		parsedIp, err := netip.ParseAddr(ip)
 		if err != nil {
 			return libRecords, err
 		}
-
-		if parsed.Is4() {
-			libRecords = append(libRecords, libdns.Record{
-				Type:  "A",
-				Name:  "@",
-				Value: ip,
-			})
-		} else {
-			libRecords = append(libRecords, libdns.Record{
-				Type:  "AAAA",
-				Name:  "@",
-				Value: ip,
-			})
-		}
+		libRecords = append(libRecords, libdns.Address{
+			Name: "@",
+			IP:   parsedIp,
+		})
 	}
 
 	txt, err := r.LookupTXT(ctx, fqdn)
@@ -70,10 +60,9 @@ func (p *Provider) getDomain(ctx context.Context, zone string) ([]libdns.Record,
 		if t == "" {
 			continue
 		}
-		libRecords = append(libRecords, libdns.Record{
-			Type:  "TXT",
-			Name:  "@",
-			Value: t,
+		libRecords = append(libRecords, libdns.TXT{
+			Name: "@",
+			Text: t,
 		})
 	}
 
@@ -86,19 +75,29 @@ func (p *Provider) setRecord(ctx context.Context, zone string, record libdns.Rec
 
 	// sanitize the domain, combines the zone and record names
 	// the record name should typically be relative to the zone
-	domain := libdns.AbsoluteName(record.Name, zone)
+	domain := libdns.AbsoluteName(record.RR().Name, zone)
 
 	params := map[string]string{"verbose": "true"}
 
-	switch record.Type {
-	case "TXT":
-		params["txt"] = record.Value
-	case "A":
-		params["ip"] = record.Value
-	case "AAAA":
-		params["ipv6"] = record.Value
+	switch record.(type) {
+	case libdns.TXT:
+		text, ok := record.(libdns.TXT)
+		if !ok {
+			return fmt.Errorf("failed to cast record to TXT")
+		}
+		params["txt"] = text.Text
+	case libdns.Address:
+		address, ok := record.(libdns.Address)
+		if !ok {
+			return fmt.Errorf("failed to cast record to Address")
+		}
+		if address.IP.Is6() {
+			params["ipv6"] = address.IP.String()
+		} else {
+			params["ip"] = address.IP.String()
+		}
 	default:
-		return fmt.Errorf("unsupported record type: %s", record.Type)
+		return fmt.Errorf("unsupported record type: %s", record.RR().Type)
 	}
 
 	if clear {
@@ -153,7 +152,7 @@ func (p *Provider) doRequest(ctx context.Context, domain string, params map[stri
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
