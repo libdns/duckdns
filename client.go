@@ -93,7 +93,7 @@ func (p *Provider) setRecord(ctx context.Context, zone string, record libdns.Rec
 			params["ip"] = rec.IP.String()
 		}
 	default:
-		return fmt.Errorf("DuckDNS unsupported record type: %s", record.RR().Type)
+		return fmt.Errorf("DuckDNS unsupported record type: %s, Go type: %T", record.RR().Type, record)
 	}
 
 	if clear {
