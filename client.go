@@ -77,13 +77,18 @@ func (p *Provider) setRecord(ctx context.Context, zone string, record libdns.Rec
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
+	rr, err := record.RR().Parse()
+	if err != nil {
+		return fmt.Errorf("DuckDNS unable to parse libdns.RR: %w", err)
+	}
+
 	// sanitize the domain, combines the zone and record names
 	// the record name should typically be relative to the zone
 	domain := libdns.AbsoluteName(record.RR().Name, zone)
 
 	params := map[string]string{"verbose": "true"}
 
-	switch rec := record.(type) {
+	switch rec := rr.(type) {
 	case libdns.TXT:
 		params["txt"] = rec.Text
 	case libdns.Address:
@@ -93,7 +98,7 @@ func (p *Provider) setRecord(ctx context.Context, zone string, record libdns.Rec
 			params["ip"] = rec.IP.String()
 		}
 	default:
-		return fmt.Errorf("DuckDNS unsupported record type: %s, Go type: %T", record.RR().Type, record)
+		return fmt.Errorf("DuckDNS unsupported record type: %s", record.RR().Type)
 	}
 
 	if clear {
@@ -101,7 +106,7 @@ func (p *Provider) setRecord(ctx context.Context, zone string, record libdns.Rec
 	}
 
 	// make the request to duckdns to set the records according to the params
-	_, err := p.doRequest(ctx, domain, params)
+	_, err = p.doRequest(ctx, domain, params)
 	if err != nil {
 		return err
 	}
